@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = ["crates/ricochet", "crates/ricochet-core"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+rune = { git = "https://github.com/anomalyco/rune", rev = "2412b3328cceb86214ec96657a137826a1b4986f" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "2412b3328cceb86214ec96657a137826a1b4986f" }
+rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "2412b3328cceb86214ec96657a137826a1b4986f" }
+
+# Rune patches these crates; a dependency's [patch] doesn't reach this workspace, so it's repeated
+# here from the same rev (see "Depending on Rune" in Rune's crates/rune/README.md).
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "2412b3328cceb86214ec96657a137826a1b4986f" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "2412b3328cceb86214ec96657a137826a1b4986f" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "2412b3328cceb86214ec96657a137826a1b4986f" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "2412b3328cceb86214ec96657a137826a1b4986f" }

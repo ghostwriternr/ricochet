@@ -1,0 +1,11 @@
+[package]
+name = "ricochet"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ricochet-core = { path = "../ricochet-core" }
+rune.workspace = true
+rune-kit.workspace = true
+rune-theme-opencode.workspace = true

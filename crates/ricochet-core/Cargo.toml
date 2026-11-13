@@ -1,0 +1,16 @@
+[package]
+name = "ricochet-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gphoto2 = "3"
+idevice = { version = "0.1.68", default-features = false, features = ["ring", "usbmuxd", "house_arrest", "afc"] }
+plist = "1.10.3"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt", "fs", "io-util"] }
+
+[[bin]]
+name = "ricochet-cli"
+path = "src/bin/ricochet-cli.rs"
