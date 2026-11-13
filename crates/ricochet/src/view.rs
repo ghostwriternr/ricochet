@@ -46,7 +46,7 @@ fn step(k: &Kit, side: Side, step: &Step) -> El {
         Side::Push => "push",
     };
     let device = match &step.leg {
-        Leg::Ready { device, .. } | Leg::Running { device, .. } => device.clone(),
+        Leg::Ready { device, .. } | Leg::Running { device, .. } => shown_name(device, device_kind),
         Leg::Absent => format!("No {device_kind}"),
         Leg::Checking | Leg::Failed { .. } => String::new(),
     };
@@ -121,6 +121,18 @@ fn step(k: &Kit, side: Side, step: &Step) -> El {
     card
 }
 
+/// A device's name with only letters, digits, spaces and common punctuation. Emoji go because
+/// Rune doesn't draw Linux's bitmap emoji font yet: a phone named "👻" showed an empty box.
+/// A name with nothing left is its kind ("iPhone").
+fn shown_name(name: &str, kind: &str) -> String {
+    let kept: String = name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == ' ' || "'’-_.,()&+".contains(*c))
+        .collect();
+    let kept = kept.split_whitespace().collect::<Vec<_>>().join(" ");
+    if kept.is_empty() { kind.to_owned() } else { kept }
+}
+
 fn size(bytes: u64) -> String {
     match bytes {
         b if b >= 1_000_000_000 => format!("{:.2} GB", b as f64 / 1e9),
@@ -139,4 +151,16 @@ fn thousands(n: usize) -> String {
         out.push(c);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shown_name;
+
+    #[test]
+    fn names_lose_emoji_and_fall_back_to_the_kind() {
+        assert_eq!(shown_name("👻", "iPhone"), "iPhone");
+        assert_eq!(shown_name("Naresh’s iPhone 🚀", "iPhone"), "Naresh’s iPhone");
+        assert_eq!(shown_name("RICOH GR IV", "camera"), "RICOH GR IV");
+    }
 }
