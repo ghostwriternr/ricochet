@@ -31,8 +31,8 @@ pub enum Leg {
 
 pub enum Update {
     Leg(Side, Leg),
-    /// How the last run ended, shown until the next run.
-    Last(Side, String),
+    /// The worker finished, with how a run ended (shown until the next run); `None` for a scan.
+    Done(Side, Option<String>),
     Library(usize, u64),
 }
 
@@ -62,19 +62,26 @@ pub fn spawn(side: Side, run: bool, cancel: Arc<AtomicBool>, inbox: Arc<Mutex<Ve
     std::thread::spawn(move || {
         let post = Post { side, inbox, waker };
         let library = library();
-        let result = match side {
+        let step = |run| match side {
             Side::Import => import(&post, &library, run, &cancel),
             Side::Push => push(&post, &library, run, &cancel),
         };
-        match result {
-            Ok(Some(note)) => post.send(Update::Last(side, note)),
-            Ok(None) => {}
-            Err(Error::Cancelled) => post.send(Update::Last(side, "Stopped".into())),
-            Err(e) => post.leg(Leg::Failed { error: e.to_string() }),
+        let mut result = step(run);
+        if matches!(result, Err(Error::Cancelled)) {
+            // Show what's left rather than the last progress.
+            result = step(false).map(|_| Some("Stopped".into()));
         }
         if let Ok(all) = library.scan() {
             post.send(Update::Library(all.len(), all.iter().map(|p| p.size).sum()));
         }
+        let note = match result {
+            Ok(note) => note,
+            Err(e) => {
+                post.leg(Leg::Failed { error: e.to_string() });
+                None
+            }
+        };
+        post.send(Update::Done(side, note));
     });
 }
 

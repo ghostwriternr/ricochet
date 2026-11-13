@@ -16,12 +16,13 @@ pub use worker::{Leg, Side, Update};
 pub struct Step {
     pub leg: Leg,
     pub last: Option<String>,
-    cancel: Option<Arc<AtomicBool>>,
+    /// Set while a worker runs this step; it stops between files when told to.
+    worker: Option<Arc<AtomicBool>>,
 }
 
 impl Step {
     pub fn busy(&self) -> bool {
-        matches!(self.leg, Leg::Checking | Leg::Running { .. })
+        self.worker.is_some()
     }
 }
 
@@ -32,7 +33,6 @@ pub struct State {
     pub library: Option<(usize, u64)>,
     inbox: Arc<Mutex<Vec<Update>>>,
     waker: Option<Waker>,
-    started: bool,
 }
 
 impl State {
@@ -60,36 +60,38 @@ impl State {
         if run {
             step.last = None;
         }
-        step.cancel = Some(cancel.clone());
+        step.worker = Some(cancel.clone());
         worker::spawn(side, run, cancel, self.inbox.clone(), waker);
     }
 
     pub fn cancel(&mut self, side: Side) {
-        if let Some(c) = &self.step_mut(side).cancel {
+        if let Some(c) = &self.step_mut(side).worker {
             c.store(true, Ordering::Relaxed);
         }
     }
 }
 
+// The first scan starts here: `poll` can run before `setup`, when there's no waker to hand a
+// worker yet. Headless runs (screenshots, scenes) never touch devices.
 fn setup(s: &mut State, waker: Waker) {
     s.waker = Some(waker);
+    if !rune::is_headless() {
+        s.refresh();
+    }
 }
 
 fn poll(s: &mut State, _clock: f64, _tx: &mut Tx) -> bool {
-    if !s.started && !rune::is_headless() {
-        s.started = true;
-        s.refresh();
-        return true;
-    }
     let updates = std::mem::take(&mut *s.inbox.lock().unwrap());
     let changed = !updates.is_empty();
     for update in updates {
         match update {
             Update::Leg(side, leg) => s.step_mut(side).leg = leg,
-            Update::Last(side, note) => {
+            Update::Done(side, note) => {
                 let step = s.step_mut(side);
-                step.last = Some(note);
-                step.cancel = None;
+                step.worker = None;
+                if note.is_some() {
+                    step.last = note;
+                }
             }
             Update::Library(files, bytes) => s.library = Some((files, bytes)),
         }
