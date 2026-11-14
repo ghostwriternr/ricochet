@@ -8,6 +8,8 @@ Copies photos camera → laptop → iPhone. Rust, UI in Rune (pinned `dev` rev i
 - `nix develop -c cargo build`
 - Screens without devices: `target/debug/ricochet --snap out.png --scene importing`
   (`--list-scenes`). A headless run never touches a camera or phone.
+- After changing `Cargo.lock`, update `cargoHash` in `package.nix`: set it to `lib.fakeHash`,
+  run `nix build`, and copy the hash it reports.
 - Release: bump `version` in both crates' `Cargo.toml`, commit, then push a tag `vX.Y.Z`.
   `.github/workflows/release.yml` builds the downloads and publishes the GitHub release.
 - `target/debug/ricochet-cli status` reads both devices and changes nothing.

@@ -29,3 +29,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+
+  # The flake package vendors crates by package.nix's cargoHash, which goes stale with Cargo.lock.
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - run: nix build -L .#default

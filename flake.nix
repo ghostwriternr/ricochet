@@ -8,6 +8,11 @@
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in {
+      packages = forAll (pkgs: rec {
+        ricochet = pkgs.callPackage ./package.nix { };
+        default = ricochet;
+      });
+
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
           packages = with pkgs; [ cargo rustc clippy rustfmt rust-analyzer pkg-config ]

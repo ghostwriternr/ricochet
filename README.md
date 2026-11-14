@@ -23,10 +23,13 @@ Both sides use the same flat layout, so selecting everything on the phone is one
 Download the latest build from [Releases](https://github.com/ghostwriternr/ricochet/releases):
 
 - **Linux (x86_64)**: `ricochet-*-x86_64-linux.tar.gz` holds `ricochet` and `ricochet-cli`.
-  It needs `libxkbcommon` and a Vulkan or GL driver. On NixOS, build from source instead.
+  It needs `libxkbcommon` and a Vulkan or GL driver. On NixOS, use the flake instead.
 - **Mac (Apple silicon)**: `ricochet-*-aarch64-macos.zip` holds `Ricochet.app` and
   `ricochet-cli`. The app isn't notarized, so clear the download flag once before opening it:
   `xattr -dr com.apple.quarantine Ricochet.app`.
+
+With Nix, the flake's `packages.<system>.default` builds both programs from source, plus a
+desktop entry on Linux: `nix run github:ghostwriternr/ricochet`, or add the flake as an input.
 
 ## Build from source
 
