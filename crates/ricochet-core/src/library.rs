@@ -1,7 +1,10 @@
 //! The laptop's copy: `<root>/<RAW|JPG|Video>/<name>`, flat, the same layout the phone gets.
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+
+use tempfile::TempPath;
 
 use crate::{Error, Result};
 
@@ -59,6 +62,21 @@ impl Library {
         Library { root: root.into() }
     }
 
+    /// `GR IV` in the user's Pictures folder: XDG's on Linux, falling back to `~/Pictures` when
+    /// `user-dirs.dirs` doesn't name one, as on a fresh NixOS.
+    pub fn default_root() -> PathBuf {
+        let pictures = dirs::picture_dir().or_else(|| dirs::home_dir().map(|home| home.join("Pictures")));
+        pictures.unwrap_or_default().join("GR IV")
+    }
+
+    /// The root for showing: home as `~`.
+    pub fn shown_root(&self) -> String {
+        match dirs::home_dir().and_then(|home| self.root.strip_prefix(home).ok().map(Path::to_owned)) {
+            Some(rel) => Path::new("~").join(rel).display().to_string(),
+            None => self.root.display().to_string(),
+        }
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -95,26 +113,28 @@ impl Library {
         Ok(photos)
     }
 
-    /// Files a finished download under its kind. An identical file already there
-    /// (same size) is a no-op; a different one is a conflict and nothing is overwritten.
+    /// Files a finished download under its kind, moving it. An identical file already there
+    /// (same size) is a no-op; a different one is a conflict and nothing is overwritten. Either
+    /// way the staged file is gone afterwards.
     pub fn file(&self, staged: &Path, name: &str) -> Result<Photo> {
+        let staged = TempPath::try_from_path(staged)?;
         let kind = Kind::of(name).ok_or_else(|| Error::Camera(format!("{name}: not a photo")))?;
-        let size = fs::metadata(staged)?.len();
+        let size = fs::metadata(&staged)?.len();
         let photo = Photo { kind, name: name.to_owned(), size };
         let dest = self.path(&photo);
         match fs::metadata(&dest) {
-            Ok(m) if m.len() == size => {
-                fs::remove_file(staged)?;
-                return Ok(photo);
-            }
+            Ok(m) if m.len() == size => return Ok(photo),
             Ok(_) => return Err(Error::Conflict(dest)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
         }
         fs::create_dir_all(dest.parent().expect("a filed photo has a folder"))?;
-        // `hard_link` refuses to replace, unlike `rename`, so a racing copy can't be clobbered.
-        fs::hard_link(staged, &dest)?;
-        fs::remove_file(staged)?;
+        // A rename that refuses to replace (renameat2 or renamex_np), so a racing copy can't be
+        // clobbered.
+        staged.persist_noclobber(&dest).map_err(|e| match e.error.kind() {
+            ErrorKind::AlreadyExists => Error::Conflict(dest),
+            _ => e.error.into(),
+        })?;
         Ok(photo)
     }
 }
@@ -123,16 +143,11 @@ impl Library {
 mod tests {
     use super::*;
 
-    fn temp_root(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ricochet-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     #[test]
     fn filing_sorts_by_kind_and_never_overwrites() {
-        let lib = Library::new(temp_root("file"));
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Library::new(dir.path());
         let stage = |name: &str, bytes: &[u8]| {
             fs::create_dir_all(lib.incoming()).unwrap();
             let p = lib.incoming().join(name);
@@ -149,11 +164,13 @@ mod tests {
         lib.file(&stage("R1.DNG", b"raw"), "R1.DNG").unwrap();
         assert!(matches!(lib.file(&stage("R1.DNG", b"other"), "R1.DNG"), Err(Error::Conflict(_))));
         assert_eq!(fs::read(lib.path(&raw)).unwrap(), b"raw");
+        assert!(!lib.incoming().join("R1.DNG").exists());
     }
 
     #[test]
     fn scan_skips_what_isnt_in_the_layout() {
-        let root = temp_root("scan");
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
         fs::create_dir_all(root.join("100RICOH")).unwrap();
         fs::write(root.join("100RICOH/R2.DNG"), b"x").unwrap();
         fs::create_dir_all(root.join("RAW")).unwrap();

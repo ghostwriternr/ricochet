@@ -28,9 +28,8 @@ cargo run --release -p ricochet
 On Linux, `usbmuxd` must be running and the phone paired ("Trust this computer"). On NixOS
 that's `services.usbmuxd.enable = true;`.
 
-`ricochet-cli` runs the same steps without a window: `status`, `import`, `push`. `adopt DIR`
-moves a folder of camera files into the library; it prints its plan and changes nothing unless
-given `--go`.
+`ricochet-cli` runs the same steps without a window: `status`, `import`, `push`. The library
+is `GR IV` in your Pictures folder; `RICOCHET_LIBRARY` overrides it for the CLI.
 
 ## Layout
 

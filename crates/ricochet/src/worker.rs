@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use ricochet_core::phone::{self, Target};
@@ -41,8 +41,8 @@ pub enum Update {
 }
 
 pub fn library() -> Library {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    Library::new(home.join("Pictures").join("GR IV"))
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    Library::new(ROOT.get_or_init(Library::default_root))
 }
 
 struct Post {

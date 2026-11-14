@@ -5,10 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+dirs = "7.0.0"
 futures-executor = "0.3.34"
 idevice = { version = "=0.1.68", default-features = false, features = ["ring", "usbmuxd", "house_arrest", "afc"] }
 mtp-rs = "=0.38.1"
 plist = "1.10.3"
+tempfile = "3.27.0"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt", "fs", "io-util"] }
 

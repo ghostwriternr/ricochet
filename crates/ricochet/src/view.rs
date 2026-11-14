@@ -19,9 +19,10 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .child(text("Ricochet").font(HEADLINE).color(k.c.text_strong))
         .child(spacer())
         .child(refresh);
+    let root = crate::worker::library().shown_root();
     let library = match s.library {
-        Some((files, bytes)) => format!("~/Pictures/GR IV · {} files · {}", thousands(files), size(bytes)),
-        None => "~/Pictures/GR IV".into(),
+        Some((files, bytes)) => format!("{root} · {} files · {}", thousands(files), size(bytes)),
+        None => root,
     };
     col()
         .w_full()
