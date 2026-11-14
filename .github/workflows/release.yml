@@ -1,0 +1,89 @@
+name: Release
+
+# Pushing a tag like v0.1.0 builds Linux and Mac downloads and publishes them as a GitHub release.
+# The tag must match the version in crates/ricochet/Cargo.toml.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: x86_64-linux
+          - os: macos-latest
+            name: aarch64-macos
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check the tag matches the version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/ricochet/Cargo.toml)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Tag $TAG doesn't match version $version in crates/ricochet/Cargo.toml"
+            exit 1
+          fi
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --release
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          dir="ricochet-$TAG-${{ matrix.name }}"
+          mkdir "$dir"
+          cp target/release/ricochet target/release/ricochet-cli README.md LICENSE "$dir"
+          tar -czf "$dir.tar.gz" "$dir"
+      - name: Package (Mac)
+        if: runner.os == 'macOS'
+        run: |
+          dir="ricochet-$TAG-${{ matrix.name }}"
+          app="$dir/Ricochet.app"
+          mkdir -p "$app/Contents/MacOS"
+          cp target/release/ricochet "$app/Contents/MacOS/"
+          cat > "$app/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>Ricochet</string>
+            <key>CFBundleIdentifier</key><string>io.github.ghostwriternr.ricochet</string>
+            <key>CFBundleExecutable</key><string>ricochet</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${TAG#v}</string>
+            <key>CFBundleVersion</key><string>${TAG#v}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          # Not notarized: an ad-hoc signature is the least an Apple silicon Mac will run.
+          codesign --force --sign - "$app"
+          cp target/release/ricochet-cli README.md LICENSE "$dir"
+          ditto -c -k --keepParent "$dir" "$dir.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ricochet-${{ github.ref_name }}-${{ matrix.name }}.*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - run: sha256sum ricochet-* > SHA256SUMS
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --repo "${{ github.repository }}" --verify-tag --generate-notes ricochet-* SHA256SUMS

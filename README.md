@@ -18,7 +18,17 @@ Both sides use the same flat layout, so selecting everything on the phone is one
 ~/Pictures/GR IV/JPG/R0000185.JPG      LocalSend/GR IV/JPG/R0000185.JPG
 ```
 
-## Run
+## Install
+
+Download the latest build from [Releases](https://github.com/ghostwriternr/ricochet/releases):
+
+- **Linux (x86_64)**: `ricochet-*-x86_64-linux.tar.gz` holds `ricochet` and `ricochet-cli`.
+  It needs `libxkbcommon` and a Vulkan or GL driver. On NixOS, build from source instead.
+- **Mac (Apple silicon)**: `ricochet-*-aarch64-macos.zip` holds `Ricochet.app` and
+  `ricochet-cli`. The app isn't notarized, so clear the download flag once before opening it:
+  `xattr -dr com.apple.quarantine Ricochet.app`.
+
+## Build from source
 
 ```sh
 nix develop
