@@ -36,7 +36,7 @@ fn main() -> Result<()> {
                 match camera::detect()? {
                     None => println!("camera: none"),
                     Some(mut cam) => {
-                        let todo = plan::new_on_camera(&cam.list()?, &have);
+                        let todo = plan::new_on_camera(&cam.list(&mut |_, _| {})?, &have);
                         println!("camera {}: {} new, {}", cam.name(), todo.len(), gb(todo.iter().map(|f| f.size).sum()));
                         if cmd == "import" {
                             transfer::import(cam.as_mut(), &library, &todo, &cancel, &mut report)?;

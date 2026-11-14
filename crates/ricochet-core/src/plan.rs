@@ -7,8 +7,10 @@ use crate::{Kind, Photo};
 /// A file as the camera lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CameraFile {
-    /// The camera's handle for it, valid while the session that listed it is open.
-    pub id: u32,
+    /// Where the camera keeps it: storage and object handle, valid while the session that listed
+    /// it is open.
+    pub storage: u64,
+    pub id: u64,
     pub name: String,
     /// 0 when the camera can't say, as for files over 4 GB.
     pub size: u64,
@@ -46,7 +48,7 @@ mod tests {
     }
 
     fn cam(name: &str, size: u64) -> CameraFile {
-        CameraFile { id: 1, name: name.into(), size }
+        CameraFile { storage: 1, id: 1, name: name.into(), size }
     }
 
     #[test]

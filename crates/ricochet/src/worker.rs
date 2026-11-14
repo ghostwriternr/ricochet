@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use ricochet_core::phone::{self, Target};
 use ricochet_core::transfer::{self, Event};
+use ricochet_core::camera::Camera;
+use ricochet_core::plan::CameraFile;
 use ricochet_core::{Error, Kind, Library, Result, camera, plan};
 use rune::Waker;
 
@@ -21,6 +23,8 @@ pub enum Side {
 pub enum Leg {
     #[default]
     Checking,
+    /// Reading the device's file list; `total` grows as folders are opened.
+    Listing { device: String, done: usize, total: usize },
     /// No camera (for import) or no phone (for push) is connected.
     Absent,
     /// `files` would be copied; zero means up to date.
@@ -62,14 +66,15 @@ pub fn spawn(side: Side, run: bool, cancel: Arc<AtomicBool>, inbox: Arc<Mutex<Ve
     std::thread::spawn(move || {
         let post = Post { side, inbox, waker };
         let library = library();
-        let step = |run| match side {
-            Side::Import => import(&post, &library, run, &cancel),
+        // A scan lists the camera afresh; a run reuses the last scan's listing.
+        let step = |run, fresh| match side {
+            Side::Import => import(&post, &library, run, fresh, &cancel),
             Side::Push => push(&post, &library, run, &cancel),
         };
-        let mut result = step(run);
+        let mut result = step(run, !run);
         if matches!(result, Err(Error::Cancelled)) {
             // Show what's left rather than the last progress.
-            result = step(false).map(|_| Some("Stopped".into()));
+            result = step(false, false).map(|_| Some("Stopped".into()));
         }
         if let Ok(all) = library.scan() {
             post.send(Update::Library(all.len(), all.iter().map(|p| p.size).sum()));
@@ -101,37 +106,72 @@ fn counts<'a>(kinds: impl Iterator<Item = Option<Kind>>, sizes: impl Iterator<It
     (files, sizes.sum(), raw, jpg)
 }
 
+/// True at most ten times a second, so progress doesn't flood the window.
+fn every_tenth(last: &mut Instant) -> bool {
+    let due = last.elapsed() >= Duration::from_millis(100);
+    if due {
+        *last = Instant::now();
+    }
+    due
+}
+
 /// Turns transfer events into `Running` snapshots, at most ten a second.
 fn progress<'a>(post: &'a Post, device: &'a str, names: Vec<String>, bytes: u64) -> impl FnMut(Event) + 'a {
     let files = names.len();
-    let (mut index, mut done, mut sent) = (0, 0, Instant::now() - Duration::from_secs(1));
+    let (mut index, mut done, mut last) = (0, 0, Instant::now() - Duration::from_secs(1));
     move |event| {
         match event {
             Event::File { index: i, .. } => index = i,
             Event::Bytes(b) => done = b,
         }
-        if matches!(event, Event::File { .. }) || sent.elapsed() >= Duration::from_millis(100) {
-            sent = Instant::now();
+        if matches!(event, Event::File { .. }) | every_tenth(&mut last) {
             let name = names[index].clone();
             post.leg(Leg::Running { device: device.to_owned(), index, files, name, done, bytes });
         }
     }
 }
 
-fn import(post: &Post, library: &Library, run: bool, cancel: &AtomicBool) -> Result<Option<String>> {
-    let Some(mut cam) = camera::detect()? else {
-        post.leg(Leg::Absent);
-        return Ok(None);
-    };
+/// The camera the last scan opened, with what it listed. Listing takes about 14 ms a file, so
+/// Import and the recount after Stop reuse it; Refresh lists afresh. If the camera was unplugged
+/// since, the copy fails and Try again, being a scan, starts over.
+static CAMERA: Mutex<Option<Listed>> = Mutex::new(None);
+
+type Listed = (Box<dyn Camera + Send>, Vec<CameraFile>);
+
+fn import(post: &Post, library: &Library, run: bool, fresh: bool, cancel: &AtomicBool) -> Result<Option<String>> {
+    let mut slot = CAMERA.lock().unwrap();
+    if fresh || slot.is_none() {
+        // Close the old session first; the camera takes one at a time.
+        *slot = None;
+        let Some(mut cam) = camera::detect()? else {
+            post.leg(Leg::Absent);
+            return Ok(None);
+        };
+        let device = cam.name().to_owned();
+        let mut last = Instant::now();
+        let files = cam.list(&mut |done, total| {
+            if every_tenth(&mut last) {
+                post.leg(Leg::Listing { device: device.clone(), done, total });
+            }
+        })?;
+        *slot = Some((cam, files));
+    }
+    let (cam, files) = slot.as_mut().expect("filled above");
     let device = cam.name().to_owned();
-    let todo = plan::new_on_camera(&cam.list()?, &library.scan()?);
+    let todo = plan::new_on_camera(files, &library.scan()?);
     let (files, bytes, raw, jpg) = counts(todo.iter().map(|f| Kind::of(&f.name)), todo.iter().map(|f| &f.size));
     if !run || files == 0 {
         post.leg(Leg::Ready { device, files, bytes, raw, jpg });
         return Ok(None);
     }
     let names = todo.iter().map(|f| f.name.clone()).collect();
-    transfer::import(cam.as_mut(), library, &todo, cancel, &mut progress(post, &device, names, bytes))?;
+    let copied = transfer::import(cam.as_mut(), library, &todo, cancel, &mut progress(post, &device, names, bytes));
+    if let Err(e) = copied {
+        if !matches!(e, Error::Cancelled) {
+            *slot = None;
+        }
+        return Err(e);
+    }
     post.leg(Leg::Ready { device, files: 0, bytes: 0, raw: 0, jpg: 0 });
     Ok(Some(format!("Imported {files} {}", if files == 1 { "file" } else { "files" })))
 }

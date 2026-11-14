@@ -46,12 +46,15 @@ fn step(k: &Kit, side: Side, step: &Step) -> El {
         Side::Push => "push",
     };
     let device = match &step.leg {
-        Leg::Ready { device, .. } | Leg::Running { device, .. } => shown_name(device, device_kind),
+        Leg::Ready { device, .. } | Leg::Running { device, .. } | Leg::Listing { device, .. } => {
+            shown_name(device, device_kind)
+        }
         Leg::Absent => format!("No {device_kind}"),
         Leg::Checking | Leg::Failed { .. } => String::new(),
     };
     let (headline, detail) = match &step.leg {
         Leg::Checking => ("Checking…".to_owned(), String::new()),
+        Leg::Listing { done, total, .. } => ("Checking…".into(), format!("{} of {} files", thousands(*done), thousands(*total))),
         Leg::Absent => match side {
             Side::Import => ("Connect your camera".into(), "Plug it in over USB and switch it on.".into()),
             Side::Push => ("Connect your iPhone".into(), "Plug it in, unlock it, and trust this computer.".into()),
@@ -115,8 +118,13 @@ fn step(k: &Kit, side: Side, step: &Step) -> El {
         .border(1.0, k.c.border_weak)
         .child(top)
         .child(middle);
-    if let Leg::Running { done, bytes, .. } = step.leg {
-        card = card.child(Progress::new(Some(done as f32 / bytes.max(1) as f32)).build(k).key("progress"));
+    let fraction = match step.leg {
+        Leg::Running { done, bytes, .. } => Some(done as f32 / bytes.max(1) as f32),
+        Leg::Listing { done, total, .. } => Some(done as f32 / total.max(1) as f32),
+        _ => None,
+    };
+    if let Some(fraction) = fraction {
+        card = card.child(Progress::new(Some(fraction)).build(k).key("progress"));
     }
     card
 }

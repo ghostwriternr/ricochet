@@ -115,6 +115,11 @@ const SCENES: &[Scene] = &[
         };
         s.push.leg = Leg::Ready { device: "👻".into(), files: 0, bytes: 0, raw: 0, jpg: 0 };
     }),
+    ("checking", |s| {
+        s.library = Some((1184, 23_110_000_000));
+        s.import.leg = Leg::Listing { device: "RICOH GR IV".into(), done: 412, total: 1315 };
+        s.push.leg = Leg::Ready { device: "👻".into(), files: 0, bytes: 0, raw: 0, jpg: 0 };
+    }),
     ("absent", |s| {
         s.library = Some((0, 0));
         s.import.leg = Leg::Absent;
