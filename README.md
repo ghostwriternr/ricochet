@@ -5,7 +5,7 @@ iPhone, one button each. Built with [Rune](https://github.com/anomalyco/rune).
 
 ![Ricochet importing from the camera](docs/importing.png)
 
-- **Camera → Laptop**: lists the camera over PTP (libgphoto2) and downloads what the library
+- **Camera → Laptop**: lists the camera over PTP on USB and downloads what the library
   doesn't have yet. It only reads from the camera.
 - **Laptop → iPhone**: sends what the phone doesn't have yet into an app's Documents folder over
   USB (usbmuxd and AFC, no mounting). It defaults to LocalSend's, which shows in Files under

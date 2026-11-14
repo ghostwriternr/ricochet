@@ -35,7 +35,7 @@ pub fn import(
         on(Event::File { index, name: file.name.clone() });
         let staged = incoming.join(&file.name);
         let _ = fs::remove_file(&staged);
-        camera.download(file, &staged)?;
+        camera.download(file, &staged, &mut |got| on(Event::Bytes(done + got)))?;
         let got = fs::metadata(&staged)?.len();
         if file.size != 0 && got != file.size {
             let _ = fs::remove_file(&staged);

@@ -10,7 +10,7 @@
     in {
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
-          packages = with pkgs; [ cargo rustc clippy rustfmt rust-analyzer pkg-config libgphoto2 rustPlatform.bindgenHook ]
+          packages = with pkgs; [ cargo rustc clippy rustfmt rust-analyzer pkg-config ]
             ++ lib.optionals stdenv.hostPlatform.isLinux [ libxkbcommon wayland ];
           # Rune opens these at run time rather than linking them.
           LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux (pkgs.lib.makeLibraryPath (with pkgs; [

@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-gphoto2 = "3"
 idevice = { version = "0.1.68", default-features = false, features = ["ring", "usbmuxd", "house_arrest", "afc"] }
+nusb = "0.2.9"
 plist = "1.10.3"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt", "fs", "io-util"] }
