@@ -1,7 +1,7 @@
 use rune::{Cx, El, TextStyle, col, row, spacer, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Progress};
 
-use crate::{Leg, Side, State, Step};
+use crate::{Lane, Leg, Side, State};
 
 const HEADLINE: TextStyle = TextStyle::new(20.0, 600.0);
 
@@ -10,7 +10,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let refresh = Button::new("Refresh")
         .variant(ButtonVariant::Ghost)
         .control_size(ControlSize::Regular)
-        .disabled(s.import.busy() && s.push.busy())
+        .disabled(s.busy())
         .on_press(|s: &mut State| s.refresh())
         .build(k)
         .key("refresh");
@@ -24,6 +24,22 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         Some((files, bytes)) => format!("{root} · {} files · {}", thousands(files), size(bytes)),
         None => root,
     };
+    let running = [&s.camera, &s.phone].iter().any(|l| matches!(l.leg, Leg::Running { .. }));
+    let pending = [&s.camera, &s.phone].iter().any(|l| matches!(l.leg, Leg::Ready { files: 1.., .. }));
+    let action = if s.busy() && running {
+        Some(Button::new("Stop").variant(ButtonVariant::Outline).on_press(|s: &mut State| s.cancel()))
+    } else if !s.busy() && pending {
+        Some(Button::new("Sync").variant(ButtonVariant::Submit).on_press(|s: &mut State| s.sync()))
+    } else {
+        None
+    };
+    let mut footer = row()
+        .center_y()
+        .gap(12.0)
+        .child(text(library).key("library").font(k.ty.text_small).color(k.c.text_weak).truncate().grow(1.0).min_w(0.0));
+    if let Some(action) = action {
+        footer = footer.child(action.build(k).key("action"));
+    }
     col()
         .w_full()
         .h_full()
@@ -31,66 +47,45 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .gap(12.0)
         .fill(k.c.bg_base)
         .child(header)
-        .child(step(k, Side::Import, &s.import))
-        .child(step(k, Side::Push, &s.push))
+        .child(lane(k, Side::Camera, s.lane(Side::Camera), s.busy()))
+        .child(lane(k, Side::Phone, s.lane(Side::Phone), s.busy()))
         .child(spacer())
-        .child(text(library).key("library").font(k.ty.text_small).color(k.c.text_weak).truncate())
+        .child(footer)
 }
 
-fn step(k: &Kit, side: Side, step: &Step) -> El {
-    let (route, verb, device_kind) = match side {
-        Side::Import => ("Camera → Laptop", "Import", "camera"),
-        Side::Push => ("Laptop → iPhone", "Send", "iPhone"),
+fn lane(k: &Kit, side: Side, lane: &Lane, busy: bool) -> El {
+    let (key, route, device_kind) = match side {
+        Side::Camera => ("camera", "Camera → Laptop", "camera"),
+        Side::Phone => ("phone", "Laptop → iPhone", "iPhone"),
     };
-    let key = match side {
-        Side::Import => "import",
-        Side::Push => "push",
-    };
-    let device = match &step.leg {
+    let device = match &lane.leg {
         Leg::Ready { device, .. } | Leg::Running { device, .. } | Leg::Listing { device, .. } => {
             shown_name(device, device_kind)
         }
         Leg::Absent => format!("No {device_kind}"),
         Leg::Checking | Leg::Failed { .. } => String::new(),
     };
-    let (headline, detail) = match &step.leg {
+    let plural = |n: usize| if n == 1 { "file" } else { "files" };
+    let (headline, detail) = match &lane.leg {
         Leg::Checking => ("Checking…".to_owned(), String::new()),
         Leg::Listing { done, total, .. } => ("Checking…".into(), format!("{} of {} files", thousands(*done), thousands(*total))),
         Leg::Absent => match side {
-            Side::Import => ("Connect your camera".into(), "Plug it in over USB and switch it on.".into()),
-            Side::Push => ("Connect your iPhone".into(), "Plug it in, unlock it, and trust this computer.".into()),
+            Side::Camera => ("Connect your camera".into(), "Plug it in over USB and switch it on.".into()),
+            Side::Phone => ("Connect your iPhone".into(), "Plug it in, unlock it, and trust this computer.".into()),
         },
-        Leg::Ready { files: 0, .. } => ("Up to date".into(), step.last.clone().unwrap_or_default()),
+        Leg::Ready { files: 0, .. } => ("Up to date".into(), lane.last.clone().unwrap_or_default()),
         Leg::Ready { files, bytes, raw, jpg, .. } => (
-            format!("{} new {}", thousands(*files), if *files == 1 { "file" } else { "files" }),
+            match side {
+                Side::Camera => format!("{} new {}", thousands(*files), plural(*files)),
+                Side::Phone => format!("{} {} to send", thousands(*files), plural(*files)),
+            },
             format!("{} · {raw} RAW, {jpg} JPG", size(*bytes)),
         ),
         Leg::Running { index, files, name, done, bytes, .. } => (
-            format!("{} {} of {}", if side == Side::Import { "Importing" } else { "Sending" }, index + 1, files),
+            format!("{} {} of {}", if side == Side::Camera { "Importing" } else { "Sending" }, index + 1, files),
             format!("{name} · {} of {}", size(*done), size(*bytes)),
         ),
         Leg::Failed { error } => ("Couldn't finish".into(), error.clone()),
-    };
-    let action = match &step.leg {
-        Leg::Ready { files, .. } if *files > 0 => Some(
-            Button::new(verb)
-                .variant(ButtonVariant::Submit)
-                .on_press(move |s: &mut State| s.start(side, true))
-                .build(k),
-        ),
-        Leg::Running { .. } => Some(
-            Button::new("Stop")
-                .variant(ButtonVariant::Outline)
-                .on_press(move |s: &mut State| s.cancel(side))
-                .build(k),
-        ),
-        Leg::Failed { .. } => Some(
-            Button::new("Try again")
-                .variant(ButtonVariant::Outline)
-                .on_press(move |s: &mut State| s.start(side, false))
-                .build(k),
-        ),
-        _ => None,
     };
     let top = row()
         .center_y()
@@ -98,17 +93,13 @@ fn step(k: &Kit, side: Side, step: &Step) -> El {
         .child(text(route).font(k.ty.text_small_medium).color(k.c.text_weak))
         .child(spacer())
         .child(text(device).key("device").font(k.ty.text_small).color(k.c.text_weak).truncate());
-    let detail_color = if matches!(step.leg, Leg::Failed { .. }) { k.c.danger.fg } else { k.c.text_weak };
+    let detail_color = if matches!(lane.leg, Leg::Failed { .. }) { k.c.danger.fg } else { k.c.text_weak };
     let body = col()
         .gap(2.0)
         .grow(1.0)
         .min_w(0.0)
         .child(text(headline).key("headline").font(k.ty.body_medium).color(k.c.text_strong))
         .child(text(detail).key("detail").font(k.ty.text_small).color(detail_color).truncate_middle());
-    let mut middle = row().center_y().gap(12.0).child(body);
-    if let Some(action) = action {
-        middle = middle.child(action.key("action"));
-    }
     let mut card = col()
         .key(key)
         .w_full()
@@ -118,14 +109,34 @@ fn step(k: &Kit, side: Side, step: &Step) -> El {
         .fill(k.c.surface_raised_base)
         .border(1.0, k.c.border_weak)
         .child(top)
-        .child(middle);
-    let fraction = match step.leg {
+        .child(body);
+    let fraction = match lane.leg {
         Leg::Running { done, bytes, .. } => Some(done as f32 / bytes.max(1) as f32),
         Leg::Listing { done, total, .. } => Some(done as f32 / total.max(1) as f32),
         _ => None,
     };
     if let Some(fraction) = fraction {
         card = card.child(Progress::new(Some(fraction)).build(k).key("progress"));
+    }
+    // Copied before and deleted since: left out, with a way to copy them again.
+    if let Leg::Ready { deleted: deleted @ 1.., .. } = lane.leg {
+        let (what, again) = match side {
+            Side::Camera => (format!("{} deleted from the library, still on the camera", thousands(deleted)), "Import again"),
+            Side::Phone => (format!("{} deleted from the iPhone", thousands(deleted)), "Send again"),
+        };
+        let restore = Button::new(again)
+            .variant(ButtonVariant::Ghost)
+            .control_size(ControlSize::Small)
+            .disabled(busy)
+            .on_press(move |s: &mut State| s.restore(side))
+            .build(k);
+        card = card.child(
+            row()
+                .center_y()
+                .gap(8.0)
+                .child(text(what).key("deleted").font(k.ty.text_small).color(k.c.text_weak).truncate().grow(1.0).min_w(0.0))
+                .child(restore.key("restore")),
+        );
     }
     card
 }

@@ -1,15 +1,24 @@
 # Ricochet
 
-A desktop app that copies photos from a camera to your laptop, then from the laptop to an
-iPhone, one button each. Built with [Rune](https://github.com/anomalyco/rune).
+A desktop app that copies photos from a camera to your laptop, and from the laptop to an
+iPhone, with one Sync button. Built with [Rune](https://github.com/anomalyco/rune).
 
-![Ricochet importing from the camera](docs/importing.png)
+![Ricochet syncing the camera and the phone](docs/importing.png)
 
 - **Camera → Laptop**: lists the camera over PTP on USB and downloads what the library
   doesn't have yet. It only reads from the camera.
 - **Laptop → iPhone**: sends what the phone doesn't have yet into an app's Documents folder over
   USB (usbmuxd and AFC, no mounting). It defaults to LocalSend's, which shows in Files under
   On My iPhone → LocalSend.
+
+Sync works with whatever is plugged in. With both, each photo goes on to the phone as soon as
+it lands on the laptop, so the slower device sets the pace. A photo you delete from the library
+or the phone after it was copied stays deleted; Ricochet offers to copy it again.
+
+Ricochet remembers the camera's file list, what it imported and what it sent in
+`ricochet.db` in your data folder (`~/.local/share/ricochet` on Linux,
+`~/Library/Application Support/ricochet` on a Mac). Deleting it loses no photos: the next
+check reads the whole camera again, and deleted photos are offered once more.
 
 Both sides use the same flat layout, so selecting everything on the phone is one tap:
 
@@ -41,12 +50,12 @@ cargo run --release -p ricochet
 On Linux, `usbmuxd` must be running and the phone paired ("Trust this computer"). On NixOS
 that's `services.usbmuxd.enable = true;`.
 
-`ricochet-cli` runs the same steps without a window: `status`, `import`, `push`. The library
-is `GR IV` in your Pictures folder; `RICOCHET_LIBRARY` overrides it for the CLI.
+`ricochet-cli` does the same without a window: `status`, and `sync [--restore-deleted]`. The
+library is `GR IV` in your Pictures folder; `RICOCHET_LIBRARY` overrides it for the CLI.
 
 ## Layout
 
-- `crates/ricochet-core`: devices, the library layout, plans and transfers. No UI.
+- `crates/ricochet-core`: devices, the library layout, the database, plans and the sync. No UI.
 - `crates/ricochet`: the window.
 
 ## License

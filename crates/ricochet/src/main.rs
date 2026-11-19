@@ -1,4 +1,4 @@
-//! Ricochet's window: camera → laptop, then laptop → iPhone, one button each.
+//! Ricochet's window: one Sync for camera → laptop → iPhone, with a lane per device.
 //! `cargo run -p ricochet -- --snap out.png --scene importing` renders a state without devices.
 
 mod view;
@@ -7,71 +7,86 @@ mod worker;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use ricochet_core::sync::Restore;
 use rune::{AppSpec, Tx, Waker};
 
 pub use worker::{Leg, Side, Update};
 
-/// One step's state, plus the outcome of its last run, which outlives a rescan.
+/// One device's state, plus how its last run ended, which outlives a recheck.
 #[derive(Default)]
-pub struct Step {
+pub struct Lane {
     pub leg: Leg,
     pub last: Option<String>,
-    /// Set while a worker runs this step; it stops between files when told to.
-    worker: Option<Arc<AtomicBool>>,
-}
-
-impl Step {
-    pub fn busy(&self) -> bool {
-        self.worker.is_some()
-    }
 }
 
 #[derive(Default)]
 pub struct State {
-    pub import: Step,
-    pub push: Step,
+    pub camera: Lane,
+    pub phone: Lane,
     pub library: Option<(usize, u64)>,
+    /// Set while a worker runs; both sides stop between files when told to.
+    worker: Option<Arc<AtomicBool>>,
     inbox: Arc<Mutex<Vec<Update>>>,
     waker: Option<Waker>,
 }
 
 impl State {
-    pub fn step_mut(&mut self, side: Side) -> &mut Step {
+    pub fn lane(&self, side: Side) -> &Lane {
         match side {
-            Side::Import => &mut self.import,
-            Side::Push => &mut self.push,
+            Side::Camera => &self.camera,
+            Side::Phone => &self.phone,
         }
+    }
+
+    fn lane_mut(&mut self, side: Side) -> &mut Lane {
+        match side {
+            Side::Camera => &mut self.camera,
+            Side::Phone => &mut self.phone,
+        }
+    }
+
+    pub fn busy(&self) -> bool {
+        self.worker.is_some()
     }
 
     pub fn refresh(&mut self) {
-        for side in [Side::Import, Side::Push] {
-            if !self.step_mut(side).busy() {
-                self.start(side, false);
+        self.start(false, Restore::default());
+    }
+
+    pub fn sync(&mut self) {
+        self.start(true, Restore::default());
+    }
+
+    /// Syncs, copying again what was deleted at `side`'s destination since it was copied.
+    pub fn restore(&mut self, side: Side) {
+        self.start(true, Restore { camera: side == Side::Camera, phone: side == Side::Phone });
+    }
+
+    /// Checks both devices, and with `run` syncs what the check found.
+    fn start(&mut self, run: bool, restore: Restore) {
+        let Some(waker) = self.waker.clone() else { return };
+        if self.busy() {
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        for lane in [&mut self.camera, &mut self.phone] {
+            lane.leg = Leg::Checking;
+            if run {
+                lane.last = None;
             }
         }
+        self.worker = Some(cancel.clone());
+        worker::spawn(run, restore, cancel, self.inbox.clone(), waker);
     }
 
-    /// Scans `side`, and with `run` copies what the scan found.
-    pub fn start(&mut self, side: Side, run: bool) {
-        let Some(waker) = self.waker.clone() else { return };
-        let cancel = Arc::new(AtomicBool::new(false));
-        let step = self.step_mut(side);
-        step.leg = Leg::Checking;
-        if run {
-            step.last = None;
-        }
-        step.worker = Some(cancel.clone());
-        worker::spawn(side, run, cancel, self.inbox.clone(), waker);
-    }
-
-    pub fn cancel(&mut self, side: Side) {
-        if let Some(c) = &self.step_mut(side).worker {
+    pub fn cancel(&mut self) {
+        if let Some(c) = &self.worker {
             c.store(true, Ordering::Relaxed);
         }
     }
 }
 
-// The first scan starts here: `poll` can run before `setup`, when there's no waker to hand a
+// The first check starts here: `poll` can run before `setup`, when there's no waker to hand a
 // worker yet. Headless runs (screenshots, scenes) never touch devices.
 fn setup(s: &mut State, waker: Waker) {
     s.waker = Some(waker);
@@ -85,15 +100,10 @@ fn poll(s: &mut State, _clock: f64, _tx: &mut Tx) -> bool {
     let changed = !updates.is_empty();
     for update in updates {
         match update {
-            Update::Leg(side, leg) => s.step_mut(side).leg = leg,
-            Update::Done(side, note) => {
-                let step = s.step_mut(side);
-                step.worker = None;
-                if note.is_some() {
-                    step.last = note;
-                }
-            }
+            Update::Leg(side, leg) => s.lane_mut(side).leg = leg,
+            Update::Note(side, note) => s.lane_mut(side).last = Some(note),
             Update::Library(files, bytes) => s.library = Some((files, bytes)),
+            Update::Finished => s.worker = None,
         }
     }
     changed
@@ -101,35 +111,51 @@ fn poll(s: &mut State, _clock: f64, _tx: &mut Tx) -> bool {
 
 type Scene = (&'static str, fn(&mut State));
 
+fn ready(device: &str, files: usize, bytes: u64, raw: usize, jpg: usize, deleted: usize) -> Leg {
+    Leg::Ready { device: device.into(), files, bytes, raw, jpg, deleted }
+}
+
 const SCENES: &[Scene] = &[
     ("ready", |s| {
         s.library = Some((1184, 23_110_000_000));
-        s.import.leg = Leg::Ready { device: "RICOH GR IV".into(), files: 48, bytes: 1_020_000_000, raw: 24, jpg: 24 };
-        s.push.leg = Leg::Ready { device: "👻".into(), files: 0, bytes: 0, raw: 0, jpg: 0 };
+        s.camera.leg = ready("RICOH GR IV", 48, 1_020_000_000, 24, 24, 0);
+        s.phone.leg = ready("👻", 48, 1_020_000_000, 24, 24, 0);
     }),
     ("importing", |s| {
         s.library = Some((1184, 23_110_000_000));
-        s.import.leg = Leg::Running {
+        s.worker = Some(Arc::default());
+        s.camera.leg = Leg::Running {
             device: "RICOH GR IV".into(), index: 17, files: 48, name: "R0000802.DNG".into(),
             done: 402_000_000, bytes: 1_020_000_000,
         };
-        s.push.leg = Leg::Ready { device: "👻".into(), files: 0, bytes: 0, raw: 0, jpg: 0 };
+        s.phone.leg = Leg::Running {
+            device: "👻".into(), index: 9, files: 48, name: "R0000793.JPG".into(),
+            done: 188_000_000, bytes: 1_020_000_000,
+        };
     }),
     ("checking", |s| {
         s.library = Some((1184, 23_110_000_000));
-        s.import.leg = Leg::Listing { device: "RICOH GR IV".into(), done: 412, total: 1315 };
-        s.push.leg = Leg::Ready { device: "👻".into(), files: 0, bytes: 0, raw: 0, jpg: 0 };
+        s.worker = Some(Arc::default());
+        s.camera.leg = Leg::Listing { device: "RICOH GR IV".into(), done: 412, total: 1315 };
+        s.phone.leg = Leg::Checking;
     }),
     ("absent", |s| {
         s.library = Some((0, 0));
-        s.import.leg = Leg::Absent;
-        s.push.leg = Leg::Absent;
+        s.camera.leg = Leg::Absent;
+        s.phone.leg = Leg::Absent;
+    }),
+    ("deleted", |s| {
+        s.library = Some((1184, 23_110_000_000));
+        s.camera.leg = ready("RICOH GR IV", 0, 0, 0, 0, 12);
+        s.camera.last = Some("Imported 48 files".into());
+        s.phone.leg = ready("👻", 0, 0, 0, 0, 3);
+        s.phone.last = Some("Sent 48 files".into());
     }),
     ("failed", |s| {
         s.library = Some((1184, 23_110_000_000));
-        s.import.leg = Leg::Ready { device: "RICOH GR IV".into(), files: 0, bytes: 0, raw: 0, jpg: 0 };
-        s.import.last = Some("Imported 48 photos".into());
-        s.push.leg = Leg::Failed { error: "phone: the phone is locked; unlock it and try again".into() };
+        s.camera.leg = ready("RICOH GR IV", 0, 0, 0, 0, 0);
+        s.camera.last = Some("Imported 48 files".into());
+        s.phone.leg = Leg::Failed { error: "phone: the phone is locked; unlock it and try again".into() };
     }),
 ];
 

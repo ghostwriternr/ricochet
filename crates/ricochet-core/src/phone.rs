@@ -1,7 +1,7 @@
 //! The phone: one app's Documents folder, reached over USB through usbmuxd, which is the folder
 //! that app shows under On My iPhone in Files. Nothing is mounted.
 
-use std::io::Read;
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::{Error, Kind, Photo, Result};
@@ -23,8 +23,16 @@ impl Default for Target {
 pub trait Phone {
     /// The name set on the phone ("Naresh's iPhone").
     fn name(&self) -> &str;
-    /// Every photo already in the target folder.
-    fn list(&mut self) -> Result<Vec<Photo>>;
+    /// Tells this phone and target folder apart from others: UDID, app and folder.
+    fn id(&self) -> &str;
+    /// Every photo already in the target folder. A path in `known` is taken to be that size
+    /// without asking the phone, which saves a round trip per file.
+    fn list(&mut self, known: &HashMap<String, u64>) -> Result<Vec<Photo>>;
+    /// A new connection to upload over. Several can upload at once.
+    fn uploader(&self) -> Result<Box<dyn Uploader + Send>>;
+}
+
+pub trait Uploader {
     /// Copies `src` to `photo`'s place, reporting bytes sent so far. A copy that stops halfway
     /// leaves only a `.part` file.
     fn upload(&mut self, src: &Path, photo: &Photo, progress: &mut dyn FnMut(u64)) -> Result<()>;
@@ -37,29 +45,50 @@ pub fn detect(target: &Target) -> Result<Option<Box<dyn Phone + Send>>> {
 
 mod afc {
     use super::*;
+    use std::collections::HashSet;
+    use std::io::Read;
+
     use idevice::afc::AfcClient;
-    use idevice::afc::opcode::AfcFopenMode;
+    use idevice::afc::opcode::{AfcFopenMode, AfcOpcode};
+    use idevice::afc::packet::{AfcPacket, AfcPacketHeader};
     use idevice::house_arrest::HouseArrestClient;
     use idevice::lockdown::LockdownClient;
+    use idevice::provider::UsbmuxdProvider;
     use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection};
     use idevice::{IdeviceError, IdeviceService};
     use tokio::runtime::Runtime;
 
+    /// AFC's largest write, as libimobiledevice and idevice use.
     const CHUNK: usize = 1 << 20;
+    /// Writes sent before waiting for the first one's reply. idevice sends one and waits; with
+    /// four out the link stays busy: 24 → 27.5 MB/s on one connection over USB 2.
+    const IN_FLIGHT: usize = 4;
 
     fn err(e: IdeviceError) -> Error {
         Error::Phone(e.to_string())
     }
 
+    fn runtime() -> Result<Runtime> {
+        Ok(tokio::runtime::Builder::new_current_thread().enable_all().build()?)
+    }
+
+    async fn connect(provider: &UsbmuxdProvider, target: &Target) -> Result<AfcClient> {
+        let afc = HouseArrestClient::connect(provider).await.map_err(err)?;
+        afc.vend_documents(target.app.clone()).await.map_err(err)
+    }
+
     pub struct Afc {
         rt: Runtime,
         afc: AfcClient,
+        provider: UsbmuxdProvider,
+        target: Target,
         name: String,
+        id: String,
         root: String,
     }
 
     pub fn detect(target: &Target) -> Result<Option<Box<dyn Phone + Send>>> {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+        let rt = runtime()?;
         let found = rt.block_on(async {
             let Ok(mut mux) = UsbmuxdConnection::default().await else { return Ok(None) };
             let devices = mux.get_devices().await.map_err(err)?;
@@ -72,33 +101,21 @@ mod afc {
                 plist::Value::String(s) => s,
                 _ => "iPhone".to_owned(),
             };
-            let afc = HouseArrestClient::connect(&provider).await.map_err(err)?;
-            let afc = afc.vend_documents(target.app.clone()).await.map_err(err)?;
-            Ok::<_, Error>(Some((afc, name)))
+            let afc = connect(&provider, target).await?;
+            let id = format!("{}:{}/{}", device.udid, target.app, target.folder);
+            Ok::<_, Error>(Some((afc, provider, name, id)))
         })?;
-        Ok(found.map(|(afc, name)| {
+        Ok(found.map(|(afc, provider, name, id)| {
             let root = format!("/Documents/{}", target.folder);
-            Box::new(Afc { rt, afc, name, root }) as Box<dyn Phone + Send>
+            Box::new(Afc { rt, afc, provider, target: target.clone(), name, id, root }) as Box<dyn Phone + Send>
         }))
     }
 
-    impl Afc {
-        /// Makes `photo`'s folder and its parents. Each fails harmlessly when the folder exists;
-        /// a real failure shows at the write or rename that follows.
-        async fn make_dirs(afc: &mut AfcClient, root: &str, photo: &Photo) {
-            let mut dir = String::new();
-            for segment in format!("{root}/{}", photo.kind.folder()).split('/').skip(1) {
-                dir = format!("{dir}/{segment}");
-                let _ = afc.mk_dir(dir.clone()).await;
-            }
-        }
-
-        async fn list_dir(afc: &mut AfcClient, path: &str) -> Result<Vec<String>> {
-            match afc.list_dir(path).await {
-                Ok(names) => Ok(names.into_iter().filter(|n| n != "." && n != "..").collect()),
-                Err(IdeviceError::Afc(idevice::afc::errors::AfcError::ObjectNotFound)) => Ok(Vec::new()),
-                Err(e) => Err(err(e)),
-            }
+    async fn list_dir(afc: &mut AfcClient, path: &str) -> Result<Vec<String>> {
+        match afc.list_dir(path).await {
+            Ok(names) => Ok(names.into_iter().filter(|n| n != "." && n != "..").collect()),
+            Err(IdeviceError::Afc(idevice::afc::errors::AfcError::ObjectNotFound)) => Ok(Vec::new()),
+            Err(e) => Err(err(e)),
         }
     }
 
@@ -107,19 +124,28 @@ mod afc {
             &self.name
         }
 
-        fn list(&mut self) -> Result<Vec<Photo>> {
+        fn id(&self) -> &str {
+            &self.id
+        }
+
+        fn list(&mut self, known: &HashMap<String, u64>) -> Result<Vec<Photo>> {
             let Afc { rt, afc, root, .. } = self;
             rt.block_on(async {
                 let mut photos = Vec::new();
                 for kind in Kind::ALL {
                     let dir = format!("{root}/{}", kind.folder());
-                    for name in Afc::list_dir(afc, &dir).await? {
+                    for name in list_dir(afc, &dir).await? {
                         if Kind::of(&name) != Some(kind) {
                             continue;
                         }
-                        let info = afc.get_file_info(format!("{dir}/{name}")).await.map_err(err)?;
+                        let photo = Photo { kind, name, size: 0 };
+                        if let Some(&size) = known.get(&photo.rel_path()) {
+                            photos.push(Photo { size, ..photo });
+                            continue;
+                        }
+                        let info = afc.get_file_info(format!("{dir}/{}", photo.name)).await.map_err(err)?;
                         if info.st_ifmt == "S_IFREG" {
-                            photos.push(Photo { kind, name, size: info.size as u64 });
+                            photos.push(Photo { size: info.size as u64, ..photo });
                         }
                     }
                 }
@@ -128,33 +154,120 @@ mod afc {
             })
         }
 
+        fn uploader(&self) -> Result<Box<dyn Uploader + Send>> {
+            let rt = runtime()?;
+            let afc = rt.block_on(connect(&self.provider, &self.target))?;
+            // Packet numbers for pipelined writes come from a range idevice's own never reach.
+            let conn = Conn { afc, root: self.root.clone(), made: HashSet::new(), packet: 1 << 40 };
+            Ok(Box::new(AfcUploader { rt, conn }))
+        }
+    }
+
+    struct AfcUploader {
+        rt: Runtime,
+        conn: Conn,
+    }
+
+    struct Conn {
+        afc: AfcClient,
+        root: String,
+        /// Folders made over this connection, so each is made once.
+        made: HashSet<String>,
+        packet: u64,
+    }
+
+    impl Conn {
+        /// Makes `dir` and its parents. Each fails harmlessly when the folder exists; a real
+        /// failure shows at the write or rename that follows.
+        async fn make_dirs(&mut self, dir: &str) {
+            let mut path = String::new();
+            for segment in dir.split('/').skip(1) {
+                path = format!("{path}/{segment}");
+                if self.made.insert(path.clone()) {
+                    let _ = self.afc.mk_dir(path.clone()).await;
+                }
+            }
+        }
+
+        /// Writes all of `file` to the open `fd`, keeping `IN_FLIGHT` writes on the wire. idevice
+        /// has no pipelined write, so this sends AFC packets itself; afcd answers each in order.
+        async fn write(&mut self, fd: u64, file: &mut std::fs::File, progress: &mut dyn FnMut(u64)) -> Result<()> {
+            let (mut in_flight, mut sent) = (0, 0);
+            let mut buf = vec![0; CHUNK];
+            loop {
+                let n = read_up_to(file, &mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                let header_payload = fd.to_le_bytes().to_vec();
+                let header_len = header_payload.len() as u64 + AfcPacketHeader::LEN;
+                self.packet += 1;
+                let header = AfcPacketHeader {
+                    magic: idevice::afc::MAGIC,
+                    entire_len: header_len + n as u64,
+                    header_payload_len: header_len,
+                    packet_num: self.packet,
+                    operation: AfcOpcode::Write,
+                };
+                self.afc.send(AfcPacket { header, header_payload, payload: buf[..n].to_vec() }).await.map_err(err)?;
+                in_flight += 1;
+                if in_flight == IN_FLIGHT {
+                    self.afc.read().await.map_err(err)?;
+                    in_flight -= 1;
+                }
+                sent += n as u64;
+                progress(sent);
+            }
+            for _ in 0..in_flight {
+                self.afc.read().await.map_err(err)?;
+            }
+            Ok(())
+        }
+    }
+
+    /// Fills `buf` unless the file ends first, so every write but the last is a full chunk.
+    fn read_up_to(file: &mut std::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut filled = 0;
+        while filled < buf.len() {
+            match file.read(&mut buf[filled..])? {
+                0 => break,
+                n => filled += n,
+            }
+        }
+        Ok(filled)
+    }
+
+    impl Uploader for AfcUploader {
         fn upload(&mut self, src: &Path, photo: &Photo, progress: &mut dyn FnMut(u64)) -> Result<()> {
-            let Afc { rt, afc, root, .. } = self;
             let mut file = std::fs::File::open(src)?;
-            let dest = format!("{root}/{}", photo.rel_path());
+            self.rt.block_on(self.conn.upload(&mut file, photo, progress))
+        }
+    }
+
+    impl Conn {
+        async fn upload(&mut self, file: &mut std::fs::File, photo: &Photo, progress: &mut dyn FnMut(u64)) -> Result<()> {
+            let dir = format!("{}/{}", self.root, photo.kind.folder());
+            let dest = format!("{dir}/{}", photo.name);
             let part = format!("{dest}.part");
-            rt.block_on(async {
-                Afc::make_dirs(afc, root, photo).await;
-                let mut fd = afc.open(part.clone(), AfcFopenMode::WrOnly).await.map_err(err)?;
-                let mut buf = vec![0; CHUNK];
-                let mut sent = 0;
-                loop {
-                    let n = file.read(&mut buf)?;
-                    if n == 0 {
-                        break;
-                    }
-                    fd.write_entire(&buf[..n]).await.map_err(err)?;
-                    sent += n as u64;
-                    progress(sent);
-                }
-                fd.close().await.map_err(err)?;
-                let size = afc.get_file_info(part.clone()).await.map_err(err)?.size as u64;
-                if size != photo.size {
-                    let _ = afc.remove(part).await;
-                    return Err(Error::Phone(format!("{}: sent {size} of {} bytes", photo.name, photo.size)));
-                }
-                afc.rename(part, dest).await.map_err(err)
-            })
+            self.make_dirs(&dir).await;
+            let mut open = (AfcFopenMode::WrOnly as u64).to_le_bytes().to_vec();
+            open.extend(part.as_bytes());
+            let opened = self.afc.send_op(AfcOpcode::FileOpen, open, Vec::new()).await.map_err(err)?;
+            let fd = opened
+                .header_payload
+                .get(..8)
+                .and_then(|b| b.try_into().ok())
+                .map(u64::from_le_bytes)
+                .ok_or_else(|| Error::Phone("the phone didn't open the file".into()))?;
+            let wrote = self.write(fd, file, progress).await;
+            self.afc.send_op(AfcOpcode::FileClose, fd.to_le_bytes().to_vec(), Vec::new()).await.map_err(err)?;
+            wrote?;
+            let size = self.afc.get_file_info(part.clone()).await.map_err(err)?.size as u64;
+            if size != photo.size {
+                let _ = self.afc.remove(part).await;
+                return Err(Error::Phone(format!("{}: sent {size} of {} bytes", photo.name, photo.size)));
+            }
+            self.afc.rename(part, dest).await.map_err(err)
         }
     }
 }

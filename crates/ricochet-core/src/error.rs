@@ -10,6 +10,8 @@ pub enum Error {
     Camera(String),
     #[error("phone: {0}")]
     Phone(String),
+    #[error("Ricochet's database: {0}")]
+    Db(#[from] rusqlite::Error),
     #[error("{} already exists with different contents", .0.display())]
     Conflict(PathBuf),
     #[error("cancelled")]
