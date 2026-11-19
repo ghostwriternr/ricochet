@@ -17,7 +17,7 @@ rustPlatform.buildRustPackage {
 
   # Not cargoLock: Rune's tiny-skia-path sits beside crates.io's under the same name and version,
   # which only this per-source vendoring keeps apart. Update the hash whenever Cargo.lock changes.
-  cargoHash = "sha256-UQfXIip8aUKJ3aQLZZd74ZziR7zx9TjQKXdXNP1PZ1E=";
+  cargoHash = "sha256-KAZuE+paImXUyJdSElQWIdjw5YYv6BDS+zuttRMxLEE=";
 
   nativeBuildInputs = [ pkg-config ]
     ++ lib.optionals stdenv.hostPlatform.isLinux [ makeWrapper copyDesktopItems ];
