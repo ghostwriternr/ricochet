@@ -49,6 +49,7 @@ mod afc {
     use std::io::Read;
 
     use idevice::afc::AfcClient;
+    use idevice::afc::errors::AfcError;
     use idevice::afc::opcode::{AfcFopenMode, AfcOpcode};
     use idevice::afc::packet::{AfcPacket, AfcPacketHeader};
     use idevice::house_arrest::HouseArrestClient;
@@ -65,7 +66,12 @@ mod afc {
     const IN_FLIGHT: usize = 4;
 
     fn err(e: IdeviceError) -> Error {
-        Error::Phone(e.to_string())
+        match e {
+            IdeviceError::Afc(AfcError::NoSpaceLeft) => {
+                Error::Phone("the iPhone is out of space; free some up and sync again".into())
+            }
+            e => Error::Phone(e.to_string()),
+        }
     }
 
     fn runtime() -> Result<Runtime> {
@@ -114,7 +120,7 @@ mod afc {
     async fn list_dir(afc: &mut AfcClient, path: &str) -> Result<Vec<String>> {
         match afc.list_dir(path).await {
             Ok(names) => Ok(names.into_iter().filter(|n| n != "." && n != "..").collect()),
-            Err(IdeviceError::Afc(idevice::afc::errors::AfcError::ObjectNotFound)) => Ok(Vec::new()),
+            Err(IdeviceError::Afc(AfcError::ObjectNotFound)) => Ok(Vec::new()),
             Err(e) => Err(err(e)),
         }
     }
@@ -191,8 +197,27 @@ mod afc {
 
         /// Writes all of `file` to the open `fd`, keeping `IN_FLIGHT` writes on the wire. idevice
         /// has no pipelined write, so this sends AFC packets itself; afcd answers each in order.
+        /// Every reply is read, even after a failure, so the next request gets its own reply.
         async fn write(&mut self, fd: u64, file: &mut std::fs::File, progress: &mut dyn FnMut(u64)) -> Result<()> {
-            let (mut in_flight, mut sent) = (0, 0);
+            let mut in_flight = 0;
+            let wrote = self.send_writes(fd, file, progress, &mut in_flight).await;
+            let mut replies = Ok(());
+            for _ in 0..in_flight {
+                if let Err(e) = self.afc.read().await {
+                    replies = replies.and(Err(err(e)));
+                }
+            }
+            wrote.and(replies)
+        }
+
+        async fn send_writes(
+            &mut self,
+            fd: u64,
+            file: &mut std::fs::File,
+            progress: &mut dyn FnMut(u64),
+            in_flight: &mut usize,
+        ) -> Result<()> {
+            let mut sent = 0;
             let mut buf = vec![0; CHUNK];
             loop {
                 let n = read_up_to(file, &mut buf)?;
@@ -210,16 +235,13 @@ mod afc {
                     operation: AfcOpcode::Write,
                 };
                 self.afc.send(AfcPacket { header, header_payload, payload: buf[..n].to_vec() }).await.map_err(err)?;
-                in_flight += 1;
-                if in_flight == IN_FLIGHT {
+                *in_flight += 1;
+                if *in_flight == IN_FLIGHT {
+                    *in_flight -= 1;
                     self.afc.read().await.map_err(err)?;
-                    in_flight -= 1;
                 }
                 sent += n as u64;
                 progress(sent);
-            }
-            for _ in 0..in_flight {
-                self.afc.read().await.map_err(err)?;
             }
             Ok(())
         }
@@ -260,14 +282,25 @@ mod afc {
                 .map(u64::from_le_bytes)
                 .ok_or_else(|| Error::Phone("the phone didn't open the file".into()))?;
             let wrote = self.write(fd, file, progress).await;
-            self.afc.send_op(AfcOpcode::FileClose, fd.to_le_bytes().to_vec(), Vec::new()).await.map_err(err)?;
-            wrote?;
-            let size = self.afc.get_file_info(part.clone()).await.map_err(err)?.size as u64;
-            if size != photo.size {
+            let closed = self.afc.send_op(AfcOpcode::FileClose, fd.to_le_bytes().to_vec(), Vec::new()).await;
+            let placed = match wrote.and(closed.map(drop).map_err(err)) {
+                Ok(()) => self.place(&part, dest, photo).await,
+                Err(e) => Err(e),
+            };
+            // A partial copy would only take up space; the next sync sends the photo again.
+            if placed.is_err() {
                 let _ = self.afc.remove(part).await;
+            }
+            placed
+        }
+
+        /// Renames the finished `.part` into place once its size matches.
+        async fn place(&mut self, part: &str, dest: String, photo: &Photo) -> Result<()> {
+            let size = self.afc.get_file_info(part.to_owned()).await.map_err(err)?.size as u64;
+            if size != photo.size {
                 return Err(Error::Phone(format!("{}: sent {size} of {} bytes", photo.name, photo.size)));
             }
-            self.afc.rename(part, dest).await.map_err(err)
+            self.afc.rename(part.to_owned(), dest).await.map_err(err)
         }
     }
 }
