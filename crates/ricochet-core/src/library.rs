@@ -29,6 +29,12 @@ impl Kind {
         }
     }
 
+    /// Whether syncs send this kind to the phone. RAW files are large (about 32 MB against 10 for
+    /// a JPEG) and stay on the laptop; the few wanted on the phone go there by hand.
+    pub fn goes_to_phone(self) -> bool {
+        self != Kind::Raw
+    }
+
     pub fn folder(self) -> &'static str {
         match self {
             Kind::Raw => "RAW",

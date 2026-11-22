@@ -398,21 +398,21 @@ mod tests {
     #[test]
     fn the_camera_feeds_the_phone_in_one_run() {
         let w = World::new();
-        fs::create_dir_all(w.library.root().join("RAW")).unwrap();
-        fs::write(w.library.root().join("RAW/R0.DNG"), b"old").unwrap();
+        fs::create_dir_all(w.library.root().join("JPG")).unwrap();
+        fs::write(w.library.root().join("JPG/R0.JPG"), b"old").unwrap();
 
-        let (plan, outcome) = w.sync(&[(10, "R1.DNG"), (11, "R1.JPG")], Restore::default());
+        let (plan, outcome) = w.sync(&[(10, "R1.DNG"), (11, "R1.JPG"), (12, "R2.JPG")], Restore::default());
         assert_eq!(plan.phone.as_ref().map(|p| (p.backlog.len(), p.incoming.len())), Some((1, 2)));
-        assert_eq!(outcome.camera.unwrap().unwrap(), 2);
+        assert_eq!(outcome.camera.unwrap().unwrap(), 3);
         assert_eq!(outcome.phone.unwrap().unwrap(), 3);
-        assert_eq!(w.on_phone(), ["JPG/R1.JPG", "RAW/R0.DNG", "RAW/R1.DNG"]);
+        assert_eq!(w.on_phone(), ["JPG/R0.JPG", "JPG/R1.JPG", "JPG/R2.JPG"]);
     }
 
     #[test]
     fn a_failing_phone_leaves_the_import_running() {
         let mut w = World::new();
         w.phone.fail = true;
-        let (_, outcome) = w.sync(&[(10, "R1.DNG"), (11, "R2.DNG")], Restore::default());
+        let (_, outcome) = w.sync(&[(10, "R1.JPG"), (11, "R2.JPG")], Restore::default());
         assert!(matches!(outcome.phone, Some(Err(Error::Phone(_)))));
         assert_eq!(outcome.camera.unwrap().unwrap(), 2);
         assert_eq!(w.library.scan().unwrap().len(), 2);
@@ -421,10 +421,10 @@ mod tests {
     #[test]
     fn deleted_photos_stay_deleted_until_restored() {
         let w = World::new();
-        let camera = [(10, "R1.DNG"), (11, "R2.DNG")];
+        let camera = [(10, "R1.JPG"), (11, "R2.JPG")];
         w.sync(&camera, Restore::default());
-        fs::remove_file(w.library.root().join("RAW/R1.DNG")).unwrap();
-        w.phone.files.lock().unwrap().remove("RAW/R2.DNG");
+        fs::remove_file(w.library.root().join("JPG/R1.JPG")).unwrap();
+        w.phone.files.lock().unwrap().remove("JPG/R2.JPG");
 
         let (plan, _) = w.sync(&camera, Restore::default());
         let deleted = |p: &Plan| {
@@ -432,13 +432,13 @@ mod tests {
             let phone = p.phone.as_ref().unwrap().deleted.iter().map(|f| f.name.clone());
             (camera.collect::<Vec<_>>(), phone.collect::<Vec<_>>())
         };
-        assert_eq!(deleted(&plan), (vec!["R1.DNG".to_owned()], vec!["R2.DNG".to_owned()]));
+        assert_eq!(deleted(&plan), (vec!["R1.JPG".to_owned()], vec!["R2.JPG".to_owned()]));
         assert_eq!(w.library.scan().unwrap().len(), 1);
 
         let (plan, _) = w.sync(&camera, Restore { camera: true, phone: true });
         assert_eq!(deleted(&plan), (vec![], vec![]));
         assert_eq!(w.library.scan().unwrap().len(), 2);
-        assert_eq!(w.on_phone(), ["RAW/R1.DNG", "RAW/R2.DNG"]);
+        assert_eq!(w.on_phone(), ["JPG/R1.JPG", "JPG/R2.JPG"]);
     }
 
     #[test]

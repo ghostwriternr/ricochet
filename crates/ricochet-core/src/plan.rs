@@ -92,7 +92,8 @@ fn phone_needs(photo: &Photo, phone: &HashMap<String, u64>, sent: &HashMap<Strin
     }
 }
 
-/// `phone` maps paths on the phone to sizes; `incoming` is what the camera will import.
+/// `phone` maps paths on the phone to sizes; `incoming` is what the camera will import. Only kinds
+/// that [go to the phone](Kind::goes_to_phone) are planned.
 pub fn phone(
     library: &[Photo],
     incoming: &[Photo],
@@ -101,7 +102,8 @@ pub fn phone(
     restore: bool,
 ) -> PhonePlan {
     let mut plan = PhonePlan::default();
-    for (photo, from_camera) in library.iter().map(|p| (p, false)).chain(incoming.iter().map(|p| (p, true))) {
+    let all = library.iter().map(|p| (p, false)).chain(incoming.iter().map(|p| (p, true)));
+    for (photo, from_camera) in all.filter(|(p, _)| p.kind.goes_to_phone()) {
         let list = match phone_needs(photo, phone, sent) {
             Need::Has => continue,
             Need::Deleted if !restore => &mut plan.deleted,
@@ -155,11 +157,18 @@ mod tests {
     }
 
     #[test]
+    fn raw_files_stay_off_the_phone() {
+        let library = [photo("R1.DNG", 10), photo("R1.JPG", 5), photo("R2.MOV", 50)];
+        let plan = phone(&library, &[photo("R3.DNG", 10)], &HashMap::new(), &HashMap::new(), true);
+        assert_eq!((plan.backlog, plan.incoming), (vec![library[1].clone(), library[2].clone()], vec![]));
+    }
+
+    #[test]
     fn the_phone_gets_short_copies_again_but_not_deleted_ones() {
-        let library = [photo("R1.DNG", 10), photo("R2.DNG", 10), photo("R3.DNG", 10)];
-        let incoming = [photo("R4.DNG", 10)];
-        let on_phone = HashMap::from([("RAW/R1.DNG".to_owned(), 10), ("RAW/R2.DNG".to_owned(), 4)]);
-        let sent = HashMap::from([("RAW/R1.DNG".to_owned(), 10), ("RAW/R3.DNG".to_owned(), 10)]);
+        let library = [photo("R1.JPG", 10), photo("R2.JPG", 10), photo("R3.JPG", 10)];
+        let incoming = [photo("R4.JPG", 10)];
+        let on_phone = HashMap::from([("JPG/R1.JPG".to_owned(), 10), ("JPG/R2.JPG".to_owned(), 4)]);
+        let sent = HashMap::from([("JPG/R1.JPG".to_owned(), 10), ("JPG/R3.JPG".to_owned(), 10)]);
         let plan = phone(&library, &incoming, &on_phone, &sent, false);
         assert_eq!(plan.backlog, [library[1].clone()]);
         assert_eq!(plan.incoming, incoming);

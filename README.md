@@ -7,9 +7,10 @@ iPhone, with one Sync button. Built with [Rune](https://github.com/anomalyco/run
 
 - **Camera → Laptop**: lists the camera over PTP on USB and downloads what the library
   doesn't have yet. It only reads from the camera.
-- **Laptop → iPhone**: sends what the phone doesn't have yet into an app's Documents folder over
-  USB (usbmuxd and AFC, no mounting). It defaults to LocalSend's, which shows in Files under
-  On My iPhone → LocalSend.
+- **Laptop → iPhone**: sends the JPEGs and videos the phone doesn't have yet into an app's
+  Documents folder over USB (usbmuxd and AFC, no mounting). It defaults to LocalSend's, which
+  shows in Files under On My iPhone → LocalSend. RAW files stay on the laptop; send the ones you
+  want with LocalSend itself.
 
 Sync works with whatever is plugged in. With both, each photo goes on to the phone as soon as
 it lands on the laptop, so the slower device sets the pace. A photo you delete from the library
@@ -23,7 +24,7 @@ check reads the whole camera again, and deleted photos are offered once more.
 Both sides use the same flat layout, so selecting everything on the phone is one tap:
 
 ```
-~/Pictures/GR IV/RAW/R0000185.DNG      LocalSend/GR IV/RAW/R0000185.DNG
+~/Pictures/GR IV/RAW/R0000185.DNG
 ~/Pictures/GR IV/JPG/R0000185.JPG      LocalSend/GR IV/JPG/R0000185.JPG
 ```
 

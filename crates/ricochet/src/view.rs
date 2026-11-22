@@ -79,7 +79,10 @@ fn lane(k: &Kit, side: Side, lane: &Lane, busy: bool) -> El {
                 Side::Camera => format!("{} new {}", thousands(*files), plural(*files)),
                 Side::Phone => format!("{} {} to send", thousands(*files), plural(*files)),
             },
-            format!("{} · {raw} RAW, {jpg} JPG", size(*bytes)),
+            [(*raw, "RAW"), (*jpg, "JPG")]
+                .iter()
+                .filter(|(n, _)| *n > 0)
+                .fold(size(*bytes), |detail, (n, kind)| format!("{detail} · {} {kind}", thousands(*n))),
         ),
         Leg::Running { index, files, name, done, bytes, .. } => (
             format!("{} {} of {}", if side == Side::Camera { "Importing" } else { "Sending" }, index + 1, files),

@@ -119,7 +119,7 @@ const SCENES: &[Scene] = &[
     ("ready", |s| {
         s.library = Some((1184, 23_110_000_000));
         s.camera.leg = ready("RICOH GR IV", 48, 1_020_000_000, 24, 24, 0);
-        s.phone.leg = ready("👻", 48, 1_020_000_000, 24, 24, 0);
+        s.phone.leg = ready("👻", 24, 220_000_000, 0, 24, 0);
     }),
     ("importing", |s| {
         s.library = Some((1184, 23_110_000_000));
@@ -129,8 +129,8 @@ const SCENES: &[Scene] = &[
             done: 402_000_000, bytes: 1_020_000_000,
         };
         s.phone.leg = Leg::Running {
-            device: "👻".into(), index: 9, files: 48, name: "R0000793.JPG".into(),
-            done: 188_000_000, bytes: 1_020_000_000,
+            device: "👻".into(), index: 9, files: 24, name: "R0000793.JPG".into(),
+            done: 88_000_000, bytes: 220_000_000,
         };
     }),
     ("checking", |s| {
