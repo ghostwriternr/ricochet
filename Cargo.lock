@@ -2843,7 +2843,7 @@ dependencies = [
 
 [[package]]
 name = "ricochet"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ricochet-core",
  "rune",
@@ -2853,7 +2853,7 @@ dependencies = [
 
 [[package]]
 name = "ricochet-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "dirs",
